@@ -1,12 +1,15 @@
-<center>
 <img alt="gpt-oss-120" src="./docs/gpt-oss.svg">
-<p align="center"><br>
-<a href="https://gpt-oss.com" target="_blank">Try gpt-oss</a> | <a href="https://cookbook.openai.com/topic/gpt-oss">Guides</a> | <a href="https://openai.com/index/gpt-oss-model-card">Model card</a>
-<br><a href="https://openai.com/index/introducing-gpt-oss/">Learn more about OpenAI's open models</a><br>
-Download <a href="https://huggingface.co/openai/gpt-oss-120b">gpt-oss-120b</a> and <a href="https://huggingface.co/openai/gpt-oss-20b">gpt-oss-20b</a> on Hugging Face</a>
+<p align="center">
+  <a href="https://gpt-oss.com"><strong>Try gpt-oss</strong></a> ·
+  <a href="https://cookbook.openai.com/topic/gpt-oss"><strong>Guides</strong></a> ·
+  <a href="https://openai.com/index/gpt-oss-model-card"><strong>Model card</strong></a> ·
+  <a href="https://openai.com/index/introducing-gpt-oss/"><strong>OpenAI blog</strong></a>
 </p>
+<p align="center">
+  <strong>Download <a href="https://huggingface.co/openai/gpt-oss-120b">gpt-oss-120b</a> and <a href="https://huggingface.co/openai/gpt-oss-20b">gpt-oss-20b</a> on Hugging Face</a></strong>
+</p>
+
 <br>
-</center>
 
 Welcome to the gpt-oss series, [OpenAI's open-weight models](https://openai.com/open-models/) designed for powerful reasoning, agentic tasks, and versatile developer use cases.
 
