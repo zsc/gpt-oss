@@ -230,7 +230,7 @@ python gpt_oss/metal/examples/generate.py gpt-oss-20b/metal/model.bin -p "why di
 
 ## Harmony format & tools
 
-Along with the model, we are also releasing a new chat format library `harmony` to interact with the model. Check [harmony.md](harmony.md) for more info about harmony.
+Along with the model, we are also releasing a new chat format library `harmony` to interact with the model. Check [this guide](https://cookbook.openai.com/articles/openai-harmony) for more info about harmony.
 
 We also include two system tools for the model: browsing and python container. Check [gpt_oss/tools](gpt_oss/tools) for the tool implementation.
 
