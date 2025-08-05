@@ -187,6 +187,13 @@ We also include an optimized reference implementation that uses [an optimized tr
 To install the reference Triton implementation run
 
 ```shell
+# You need to install triton from source to use the triton implementation
+git clone https://github.com/triton-lang/triton
+cd triton/
+pip install -r python/requirements.txt
+pip install -e . --verbose --no-build-isolation
+
+# Install the gpt-oss triton implementation
 pip install -e .[triton]
 ```
 
