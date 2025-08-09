@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tokenizer 分词器模块分析</title>
+    <link rel="stylesheet" href="./assets/style.css">
+    <link rel="stylesheet" href="./assets/highlight.css">
+    <script src="./assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <ul class="nav-list"><li class=""><a href="./00_项目总览.html">GPT-OSS 项目技术分析总览</a></li><li class=""><a href="./01_torch_model.html">torch/model.py 模块分析文档</a></li><li class=""><a href="./02_triton_model.html">Triton 模型实现分析</a></li><li class=""><a href="./03_chat.html">chat.py 文件分析文档</a></li><li class="active"><a href="./04_tokenizer.html">Tokenizer 分词器模块分析</a></li><li class=""><a href="./05_torch_weights.html">Torch Weights 权重加载模块分析</a></li><li class=""><a href="./06_responses_api_server.html">Responses API Server 响应式API服务器分析</a></li><li class=""><a href="./07_tools_tool.html">Tools Tool 工具基类模块分析</a></li><li class=""><a href="./08_triton_moe.html">Triton MoE 专家混合模型模块分析</a></li><li class=""><a href="./09_metal_model.html">Metal Model C语言实现模块分析</a></li><li class=""><a href="./10_generate.html">Generate 文本生成主脚本分析</a></li></ul>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="tokenizer">Tokenizer 分词器模块分析</h1>
+<h2 id="_1">文件位置</h2>
+<p><code>/Users/georgezhou/Downloads/gpt-oss/gpt_oss/tokenizer.py</code></p>
+<h2 id="_2">概述</h2>
+<p>这是一个基于 tiktoken 的分词器实现，专门为 GPT-OSS 项目定制。它扩展了 OpenAI 的 o200k_base 编码方案，增加了额外的特殊令牌，用于支持模型的特定功能。</p>
+<h2 id="_3">核心功能</h2>
+<h3 id="get_tokenizer"><code>get_tokenizer()</code> 函数</h3>
+<p><strong>位置</strong>: 第 3-30 行<br />
+<strong>作用</strong>: 创建并返回自定义的 tiktoken 编码器实例</p>
+<h4 id="_4">实现细节:</h4>
+<ol>
+<li><strong>基础编码器获取</strong> (第 4 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">o200k_base = tiktoken.get_encoding(&quot;o200k_base&quot;)
+</code></pre>
+
+<p>使用 OpenAI 的 o200k_base 作为基础编码</p>
+<ol start="2">
+<li><strong>自定义编码器创建</strong> (第 5-29 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">tokenizer = tiktoken.Encoding(
+    name=&quot;o200k_harmony&quot;,
+    pat_str=o200k_base._pat_str,
+    mergeable_ranks=o200k_base._mergeable_ranks,
+    special_tokens={...}
+)
+</code></pre>
+
+<ol start="3">
+<li>
+<p><strong>特殊令牌定义</strong> (第 9-28 行):
+   - <code>&lt;|startoftext|&gt;</code>: 199998 - 文本开始标记
+   - <code>&lt;|endoftext|&gt;</code>: 199999 - 文本结束标记
+   - <code>&lt;|reserved_200000|&gt;</code> 至 <code>&lt;|reserved_200011|&gt;</code>: 200000-200011 - 预留令牌
+   - <code>&lt;|return|&gt;</code>: 200002 - 返回标记
+   - <code>&lt;|constrain|&gt;</code>: 200003 - 约束标记
+   - <code>&lt;|channel|&gt;</code>: 200005 - 通道标记
+   - <code>&lt;|start|&gt;</code>: 200006 - 开始标记
+   - <code>&lt;|end|&gt;</code>: 200007 - 结束标记
+   - <code>&lt;|message|&gt;</code>: 200008 - 消息标记
+   - <code>&lt;|call|&gt;</code>: 200012 - 调用标记</p>
+</li>
+<li>
+<p><strong>批量预留令牌</strong> (第 26-28 行):</p>
+</li>
+</ol>
+<pre class="codehilite"><code class="language-python">f&quot;&lt;|reserved_{i}|&gt;&quot;: i for i in range(200013, 201088)
+</code></pre>
+
+<p>生成从 200013 到 201087 的预留令牌，共 1075 个</p>
+<h2 id="_5">技术特性</h2>
+<h3 id="_6">词汇表扩展</h3>
+<ul>
+<li>基础词汇: 继承 o200k_base 的全部词汇</li>
+<li>扩展词汇: 新增约 1100 个特殊令牌</li>
+<li>总词汇量: 约 201,088 个令牌</li>
+</ul>
+<h3 id="_7">特殊令牌用途</h3>
+<ol>
+<li><strong>结构化标记</strong>: <code>&lt;|start|&gt;</code>, <code>&lt;|end|&gt;</code>, <code>&lt;|message|&gt;</code></li>
+<li><strong>控制标记</strong>: <code>&lt;|return|&gt;</code>, <code>&lt;|constrain|&gt;</code>, <code>&lt;|call|&gt;</code></li>
+<li><strong>系统标记</strong>: <code>&lt;|startoftext|&gt;</code>, <code>&lt;|endoftext|&gt;</code></li>
+<li><strong>通道标记</strong>: <code>&lt;|channel|&gt;</code></li>
+<li><strong>预留空间</strong>: 大量预留令牌供未来扩展</li>
+</ol>
+<h2 id="_8">与其他模块的关系</h2>
+<h3 id="_9">直接依赖</h3>
+<ul>
+<li><code>tiktoken</code>: OpenAI 的分词库</li>
+</ul>
+<h3 id="_10">被调用模块</h3>
+<ul>
+<li><code>generate.py</code>: 主生成脚本使用 (第 29 行)</li>
+<li><code>gpt_oss/chat.py</code>: 对话系统</li>
+<li><code>gpt_oss/responses_api/api_server.py</code>: API 服务器</li>
+</ul>
+<h3 id="_11">关键集成点</h3>
+<pre class="codehilite"><code class="language-python"># 在 generate.py 中的使用
+tokenizer = get_tokenizer()
+tokens = tokenizer.encode(args.prompt)
+</code></pre>
+
+<h2 id="_12">设计模式</h2>
+<h3 id="_13">工厂模式</h3>
+<p><code>get_tokenizer()</code> 函数作为工厂方法，封装了复杂的编码器创建逻辑</p>
+<h3 id="_14">适配器模式</h3>
+<p>在 tiktoken 基础上添加自定义特殊令牌，适配项目特定需求</p>
+<h2 id="_15">性能特征</h2>
+<ul>
+<li><strong>内存效率</strong>: 继承 tiktoken 的高效实现</li>
+<li><strong>速度</strong>: 基于 Rust 后端的快速编解码</li>
+<li><strong>扩展性</strong>: 大量预留令牌支持未来功能扩展</li>
+</ul>
+<h2 id="_16">使用示例</h2>
+<pre class="codehilite"><code class="language-python">from gpt_oss.tokenizer import get_tokenizer
+
+# 获取分词器
+tokenizer = get_tokenizer()
+
+# 编码文本
+text = &quot;Hello, world!&quot;
+tokens = tokenizer.encode(text)
+
+# 解码令牌
+decoded = tokenizer.decode(tokens)
+
+# 特殊令牌使用
+special_tokens = tokenizer.encode(&quot;&lt;|start|&gt;Hello&lt;|end|&gt;&quot;, allowed_special=&quot;all&quot;)
+</code></pre>
+
+<h2 id="_17">重要注意事项</h2>
+<ol>
+<li>特殊令牌需要使用 <code>allowed_special="all"</code> 参数进行编码</li>
+<li>令牌 ID 从 199998 开始，避免与基础词汇表冲突</li>
+<li>预留了大量令牌空间，为未来功能扩展提供充足空间</li>
+</ol>
+            </article>
+            
+            <nav class="page-nav"><a href="./03_chat.html" class="nav-link prev">← chat.py 文件分析文档</a><a href="./05_torch_weights.html" class="nav-link next">Torch Weights 权重加载模块分析 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>

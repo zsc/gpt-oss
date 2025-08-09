@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>torch/model.py 模块分析文档</title>
+    <link rel="stylesheet" href="./assets/style.css">
+    <link rel="stylesheet" href="./assets/highlight.css">
+    <script src="./assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <ul class="nav-list"><li class=""><a href="./00_项目总览.html">GPT-OSS 项目技术分析总览</a></li><li class="active"><a href="./01_torch_model.html">torch/model.py 模块分析文档</a></li><li class=""><a href="./02_triton_model.html">Triton 模型实现分析</a></li><li class=""><a href="./03_chat.html">chat.py 文件分析文档</a></li><li class=""><a href="./04_tokenizer.html">Tokenizer 分词器模块分析</a></li><li class=""><a href="./05_torch_weights.html">Torch Weights 权重加载模块分析</a></li><li class=""><a href="./06_responses_api_server.html">Responses API Server 响应式API服务器分析</a></li><li class=""><a href="./07_tools_tool.html">Tools Tool 工具基类模块分析</a></li><li class=""><a href="./08_triton_moe.html">Triton MoE 专家混合模型模块分析</a></li><li class=""><a href="./09_metal_model.html">Metal Model C语言实现模块分析</a></li><li class=""><a href="./10_generate.html">Generate 文本生成主脚本分析</a></li></ul>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="torchmodelpy">torch/model.py 模块分析文档</h1>
+<h2 id="1">1. 文件概述和作用</h2>
+<p><code>torch/model.py</code> 是 gpt-oss 项目中的核心模型实现文件，使用 PyTorch 框架实现了一个完整的基于 Transformer 架构的大语言模型。该文件包含了模型的所有核心组件，包括注意力机制、多专家系统(MoE)、位置编码(RoPE)、归一化层等。</p>
+<p><strong>主要功能：</strong></p>
+<ul>
+<li>实现基于 Transformer 的大语言模型架构</li>
+<li>支持多专家系统(Mixture of Experts, MoE)</li>
+<li>实现旋转位置编码(Rotary Position Embedding, RoPE)</li>
+<li>提供模型权重加载和推理功能</li>
+<li>支持分布式训练和推理</li>
+</ul>
+<h2 id="2">2. 主要类和函数列表</h2>
+<h3 id="_1">数据类</h3>
+<ul>
+<li><code>ModelConfig</code> (第12-30行): 模型配置参数类</li>
+</ul>
+<h3 id="_2">核心组件类</h3>
+<ul>
+<li><code>RMSNorm</code> (第32-47行): 根均方归一化层</li>
+<li><code>RotaryEmbedding</code> (第63-150行): 旋转位置编码</li>
+<li><code>AttentionBlock</code> (第176-246行): 注意力机制模块</li>
+<li><code>MLPBlock</code> (第259-336行): 多层感知机和多专家系统模块</li>
+<li><code>TransformerBlock</code> (第339-354行): Transformer 基础块</li>
+<li><code>Transformer</code> (第357-441行): 完整的 Transformer 模型</li>
+<li><code>TokenGenerator</code> (第444-477行): 文本生成器</li>
+</ul>
+<h3 id="_3">核心函数</h3>
+<ul>
+<li><code>_apply_rotary_emb</code> (第50-60行): 应用旋转位置编码的底层函数</li>
+<li><code>sdpa</code> (第153-173行): 缩放点积注意力实现</li>
+<li><code>swiglu</code> (第249-256行): SwiGLU 激活函数</li>
+</ul>
+<h2 id="3">3. 核心类详细说明</h2>
+<h3 id="31-modelconfig-12-30">3.1 ModelConfig (第12-30行)</h3>
+<p>模型配置数据类，定义了模型的所有关键参数。</p>
+<p><strong>关键参数说明：</strong></p>
+<ul>
+<li><code>num_hidden_layers</code>: 36 - Transformer 层数</li>
+<li><code>num_experts</code>: 128 - 专家网络数量</li>
+<li><code>experts_per_token</code>: 4 - 每个 token 激活的专家数</li>
+<li><code>vocab_size</code>: 201088 - 词汇表大小</li>
+<li><code>hidden_size</code>: 2880 - 隐藏层维度</li>
+<li><code>intermediate_size</code>: 2880 - 中间层维度</li>
+<li><code>head_dim</code>: 64 - 注意力头维度</li>
+<li><code>num_attention_heads</code>: 64 - 注意力头数量</li>
+<li><code>num_key_value_heads</code>: 8 - 键值头数量(支持 Grouped Query Attention)</li>
+<li><code>sliding_window</code>: 128 - 滑动窗口大小</li>
+<li><code>rope_theta</code>: 150000.0 - RoPE 基础频率</li>
+<li><code>rope_scaling_factor</code>: 32.0 - RoPE 缩放因子</li>
+</ul>
+<h3 id="32-rmsnorm-32-47">3.2 RMSNorm (第32-47行)</h3>
+<p>实现根均方归一化(Root Mean Square Layer Normalization)。</p>
+<p><strong>参数：</strong></p>
+<ul>
+<li><code>num_features</code>: 特征数量</li>
+<li><code>eps</code>: 数值稳定性常数，默认 1e-05</li>
+</ul>
+<p><strong>算法实现 (第43-47行)：</strong></p>
+<pre class="codehilite"><code class="language-python">def forward(self, x: torch.Tensor) -&gt; torch.Tensor:
+    t, dtype = x.float(), x.dtype
+    t = t * torch.rsqrt(torch.mean(t**2, dim=-1, keepdim=True) + self.eps)
+    return (t * self.scale).to(dtype)
+</code></pre>
+
+<h3 id="33-rotaryembedding-63-150">3.3 RotaryEmbedding (第63-150行)</h3>
+<p>实现旋转位置编码(Rotary Position Embedding, RoPE)，支持 YaRN 扩展方法。</p>
+<p><strong>关键方法：</strong></p>
+<h4 id="_compute_concentration_and_inv_freq-85-123"><code>_compute_concentration_and_inv_freq</code> (第85-123行)</h4>
+<p>基于 YaRN 论文实现的频率计算方法，支持上下文长度扩展：</p>
+<ul>
+<li>当 <code>scaling_factor &gt; 1.0</code> 时使用 YaRN 的 NTK 插值方法</li>
+<li>支持高频和低频的不同处理策略</li>
+<li>计算浓度参数用于缩放</li>
+</ul>
+<h4 id="_compute_cos_sin-125-131"><code>_compute_cos_sin</code> (第125-131行)</h4>
+<p>计算正弦和余弦值：</p>
+<pre class="codehilite"><code class="language-python">t = torch.arange(num_tokens, dtype=torch.float32, device=self.device)
+freqs = torch.einsum(&quot;i,j-&gt;ij&quot;, t, inv_freq)
+cos = freqs.cos() * concentration
+sin = freqs.sin() * concentration
+</code></pre>
+
+<h4 id="forward-133-150"><code>forward</code> (第133-150行)</h4>
+<p>对查询和键应用旋转位置编码</p>
+<h3 id="34-attentionblock-176-246">3.4 AttentionBlock (第176-246行)</h3>
+<p>实现多头注意力机制，支持滑动窗口和 Grouped Query Attention。</p>
+<p><strong>关键特性：</strong></p>
+<ul>
+<li>支持 Grouped Query Attention (GQA)</li>
+<li>滑动窗口注意力 (仅偶数层使用，第188行)</li>
+<li>Sink tokens 机制 (第189-191行)</li>
+</ul>
+<p><strong>前向传播流程 (第217-246行)：</strong></p>
+<ol>
+<li>Layer normalization (第218行)</li>
+<li>QKV 投影和切分 (第219-232行)</li>
+<li>RoPE 位置编码 (第242行)</li>
+<li>缩放点积注意力 (第243行)</li>
+<li>输出投影和残差连接 (第244-245行)</li>
+</ol>
+<h3 id="35-mlpblock-259-336">3.5 MLPBlock (第259-336行)</h3>
+<p>实现多专家系统(Mixture of Experts, MoE)和 SwiGLU 激活函数。</p>
+<p><strong>专家选择机制 (第314-317行)：</strong></p>
+<pre class="codehilite"><code class="language-python">g = self.gate(t)
+experts = torch.topk(g, k=self.experts_per_token, dim=-1, sorted=True)
+expert_weights = torch.nn.functional.softmax(experts.values, dim=1)
+expert_indices = experts.indices
+</code></pre>
+
+<p><strong>两层 MLP 结构：</strong></p>
+<ol>
+<li><strong>MLP1</strong> (第319-323行): 投影到中间维度并应用 SwiGLU</li>
+<li><strong>MLP2</strong> (第325-331行): 投影回隐藏维度，支持分布式 all-reduce</li>
+</ol>
+<p><strong>专家权重聚合 (第334行)：</strong></p>
+<pre class="codehilite"><code class="language-python">t = torch.einsum(&quot;bec,be-&gt;bc&quot;, t, expert_weights)
+</code></pre>
+
+<h2 id="4">4. 重要函数详细说明</h2>
+<h3 id="41-_apply_rotary_emb-50-60">4.1 _apply_rotary_emb (第50-60行)</h3>
+<p><strong>功能：</strong> 应用旋转位置编码的核心计算
+<strong>参数：</strong></p>
+<ul>
+<li><code>x</code>: 输入张量</li>
+<li><code>cos</code>: 余弦值</li>
+<li><code>sin</code>: 正弦值</li>
+</ul>
+<p><strong>实现原理：</strong></p>
+<pre class="codehilite"><code class="language-python">x1, x2 = torch.chunk(x, 2, dim=-1)  # 将最后一维分成两半
+o1 = x1 * cos - x2 * sin           # 旋转变换
+o2 = x2 * cos + x1 * sin
+return torch.cat((o1, o2), dim=-1)
+</code></pre>
+
+<h3 id="42-sdpa-153-173">4.2 sdpa (第153-173行)</h3>
+<p><strong>功能：</strong> 实现缩放点积注意力(Scaled Dot-Product Attention)
+<strong>参数：</strong></p>
+<ul>
+<li><code>Q, K, V</code>: 查询、键、值张量</li>
+<li><code>S</code>: Sink tokens</li>
+<li><code>sm_scale</code>: 缩放因子</li>
+<li><code>sliding_window</code>: 滑动窗口大小</li>
+</ul>
+<p><strong>关键实现：</strong></p>
+<ol>
+<li><strong>注意力掩码</strong> (第161-165行): 因果掩码 + 滑动窗口掩码</li>
+<li><strong>Sink tokens</strong> (第169行): 添加 sink tokens 到注意力计算中</li>
+<li><strong>Softmax 计算</strong> (第170-171行): 包含 sink tokens 的 softmax</li>
+</ol>
+<h3 id="43-swiglu-249-256">4.3 swiglu (第249-256行)</h3>
+<p><strong>功能：</strong> 实现 SwiGLU 激活函数
+<strong>参数：</strong></p>
+<ul>
+<li><code>x</code>: 输入张量 (包含门控和线性部分)</li>
+<li><code>alpha</code>: 激活函数参数，默认 1.702</li>
+<li><code>limit</code>: 输入值限制，默认 7.0</li>
+</ul>
+<p><strong>实现：</strong></p>
+<pre class="codehilite"><code class="language-python">x_glu, x_linear = x[..., ::2], x[..., 1::2]  # 分离门控和线性部分
+x_glu = x_glu.clamp(min=None, max=limit)      # 限制门控值
+x_linear = x_linear.clamp(-limit, max=limit)   # 限制线性值
+out_glu = x_glu * torch.sigmoid(alpha * x_glu)
+return out_glu * (x_linear + 1)               # 线性部分加1的偏置
+</code></pre>
+
+<h2 id="5">5. 与其他模块的关系</h2>
+<h3 id="_4">依赖关系：</h3>
+<ul>
+<li><code>gpt_oss.torch.weights.Checkpoint</code>: 用于加载模型权重 (第9行)</li>
+<li><code>torch.distributed</code>: 支持分布式训练 (第7行)</li>
+</ul>
+<h3 id="_5">被使用关系：</h3>
+<ul>
+<li><code>TokenGenerator</code> 类提供推理接口，被其他生成模块调用</li>
+<li><code>Transformer.from_checkpoint</code> 静态方法用于模型加载</li>
+</ul>
+<h2 id="6">6. 关键实现细节</h2>
+<h3 id="61-rope">6.1 RoPE 位置编码</h3>
+<ul>
+<li>支持 YaRN 方法进行上下文长度扩展</li>
+<li>使用 NTK 插值方法处理不同频率分量</li>
+<li>支持浓度参数调整</li>
+</ul>
+<h3 id="62-moe">6.2 多专家系统 (MoE)</h3>
+<ul>
+<li>每个 token 激活 4 个专家 (可配置)</li>
+<li>使用 Top-K 选择机制</li>
+<li>支持分布式计算，MLP2 层进行 all-reduce 操作</li>
+</ul>
+<h3 id="63">6.3 注意力机制优化</h3>
+<ul>
+<li>Grouped Query Attention 减少 KV cache 内存占用</li>
+<li>滑动窗口注意力提高长序列效率</li>
+<li>Sink tokens 机制保持注意力模式</li>
+</ul>
+<h3 id="64">6.4 数值稳定性</h3>
+<ul>
+<li>使用 bfloat16 精度平衡性能和精度</li>
+<li>RMSNorm 使用 float32 计算确保稳定性</li>
+<li>SwiGLU 激活函数添加输入值限制</li>
+</ul>
+<h2 id="7">7. 调用示例和使用说明</h2>
+<h3 id="71">7.1 模型加载示例</h3>
+<pre class="codehilite"><code class="language-python"># 从检查点加载模型
+model = Transformer.from_checkpoint(&quot;path/to/checkpoint&quot;, device=&quot;cuda&quot;)
+
+# 直接推理
+tokens = torch.tensor([1, 2, 3, 4], device=&quot;cuda&quot;)
+logits = model(tokens)
+</code></pre>
+
+<h3 id="72">7.2 文本生成示例</h3>
+<pre class="codehilite"><code class="language-python"># 创建生成器
+generator = TokenGenerator(&quot;path/to/checkpoint&quot;, torch.device(&quot;cuda&quot;))
+
+# 生成文本
+prompt_tokens = [1, 2, 3]
+stop_tokens = [0]
+for token in generator.generate(prompt_tokens, stop_tokens, temperature=0.8):
+    print(token)
+</code></pre>
+
+<h3 id="73">7.3 分布式使用</h3>
+<p>模型支持分布式训练和推理，MLP 层会根据 world_size 自动分片：</p>
+<pre class="codehilite"><code class="language-python"># 模型会自动检测分布式环境
+# MLP 中间维度会按 world_size 分片
+# 需要在 MLP2 层进行 all-reduce 聚合结果
+</code></pre>
+
+<h2 id="8">8. 性能特性</h2>
+<ul>
+<li><strong>内存效率</strong>: 使用 Grouped Query Attention 和滑动窗口减少内存占用</li>
+<li><strong>计算效率</strong>: MoE 架构只激活部分专家，提高推理速度</li>
+<li><strong>扩展性</strong>: 支持分布式计算，可扩展到多个 GPU</li>
+<li><strong>数值稳定</strong>: 混合精度计算策略保证训练稳定性</li>
+</ul>
+<p>该模型实现体现了现代大语言模型的多项先进技术，是一个完整且高效的 Transformer 实现。</p>
+            </article>
+            
+            <nav class="page-nav"><a href="./00_项目总览.html" class="nav-link prev">← GPT-OSS 项目技术分析总览</a><a href="./02_triton_model.html" class="nav-link next">Triton 模型实现分析 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>

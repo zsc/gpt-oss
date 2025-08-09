@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Metal Model C语言实现模块分析</title>
+    <link rel="stylesheet" href="./assets/style.css">
+    <link rel="stylesheet" href="./assets/highlight.css">
+    <script src="./assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <ul class="nav-list"><li class=""><a href="./00_项目总览.html">GPT-OSS 项目技术分析总览</a></li><li class=""><a href="./01_torch_model.html">torch/model.py 模块分析文档</a></li><li class=""><a href="./02_triton_model.html">Triton 模型实现分析</a></li><li class=""><a href="./03_chat.html">chat.py 文件分析文档</a></li><li class=""><a href="./04_tokenizer.html">Tokenizer 分词器模块分析</a></li><li class=""><a href="./05_torch_weights.html">Torch Weights 权重加载模块分析</a></li><li class=""><a href="./06_responses_api_server.html">Responses API Server 响应式API服务器分析</a></li><li class=""><a href="./07_tools_tool.html">Tools Tool 工具基类模块分析</a></li><li class=""><a href="./08_triton_moe.html">Triton MoE 专家混合模型模块分析</a></li><li class="active"><a href="./09_metal_model.html">Metal Model C语言实现模块分析</a></li><li class=""><a href="./10_generate.html">Generate 文本生成主脚本分析</a></li></ul>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="metal-model-c">Metal Model C语言实现模块分析</h1>
+<h2 id="_1">文件位置</h2>
+<p><code>/Users/georgezhou/Downloads/gpt-oss/gpt_oss/metal/source/model.c</code></p>
+<h2 id="_2">概述</h2>
+<p>这是 GPT-OSS 项目的 Metal (Apple GPU) 后端 C 语言实现，提供了从文件加载模型、初始化 Metal 设备和内核、管理权重缓冲区等核心功能。它是在 Apple Silicon 设备上进行高性能 GPU 推理的关键模块。</p>
+<h2 id="_3">核心系统包含</h2>
+<p><strong>位置</strong>: 第 1-24 行</p>
+<pre class="codehilite"><code class="language-c">#include &lt;assert.h&gt;
+#include &lt;inttypes.h&gt;
+#include &lt;stdatomic.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+#include &lt;errno.h&gt;
+#include &lt;fcntl.h&gt;
+#include &lt;mach/vm_page_size.h&gt;  // Apple 系统页面大小
+#include &lt;sys/mman.h&gt;           // 内存映射
+#include &lt;sys/stat.h&gt;
+#include &lt;sys/types.h&gt;
+#include &lt;unistd.h&gt;
+#include &lt;gpt-oss.h&gt;            // 项目主头文件
+</code></pre>
+
+<h2 id="_4">核心工具函数</h2>
+<h3 id="_5">内存页面对齐函数</h3>
+<h4 id="round_up_to_page_size"><code>round_up_to_page_size</code></h4>
+<p><strong>位置</strong>: 第 27-34 行</p>
+<pre class="codehilite"><code class="language-c">static size_t round_up_to_page_size(size_t bytes) {
+    const size_t page_size_mask = (size_t) vm_page_size - 1;
+    if ((bytes &amp; page_size_mask) != 0) {
+        bytes |= page_size_mask;
+        bytes += 1;
+    }
+    return bytes;
+}
+</code></pre>
+
+<h4 id="round_down_to_page_size"><code>round_down_to_page_size</code></h4>
+<p><strong>位置</strong>: 第 36-39 行</p>
+<pre class="codehilite"><code class="language-c">static size_t round_down_to_page_size(size_t bytes) {
+    const size_t page_size_mask = (size_t) vm_page_size - 1;
+    return bytes &amp; ~page_size_mask;
+}
+</code></pre>
+
+<h4 id="_6">功能说明:</h4>
+<ul>
+<li><strong>页面对齐</strong>: 确保内存分配符合系统页面边界要求</li>
+<li><strong>性能优化</strong>: 页面对齐的内存访问更高效</li>
+<li><strong>系统兼容</strong>: 适配不同 Apple 设备的页面大小</li>
+</ul>
+<h3 id="io">文件 I/O 函数</h3>
+<h4 id="read_fd"><code>read_fd</code> 完整文件读取</h4>
+<p><strong>位置</strong>: 第 41-59 行</p>
+<pre class="codehilite"><code class="language-c">static enum gptoss_status read_fd(int fd, void* data, size_t size, const char* path) {
+    size_t bytes_to_read = size;
+    char* current_byte = (char*) data;
+    do {
+        const ssize_t read_result = read(fd, current_byte, bytes_to_read);
+        if (read_result &lt; 0) {
+            GPTOSS_LOG_ERROR(&quot;reading %zu bytes from file %s failed with error %d&quot;,
+                size, path, errno);
+            return gptoss_status_io_error;
+        }
+        current_byte += (size_t) read_result;
+        bytes_to_read -= (size_t) read_result;
+    } while (bytes_to_read != 0);
+    return gptoss_status_success;
+}
+</code></pre>
+
+<h4 id="_7">特性:</h4>
+<ul>
+<li><strong>完整读取</strong>: 循环读取确保所有数据都被读取</li>
+<li><strong>错误处理</strong>: 详细的错误日志和状态返回</li>
+<li><strong>鲁棒性</strong>: 处理部分读取情况</li>
+</ul>
+<h4 id="prefetch_fd"><code>prefetch_fd</code> 文件预取优化</h4>
+<p><strong>位置</strong>: 第 61-78 行</p>
+<pre class="codehilite"><code class="language-c">static void prefetch_fd(int fd, size_t offset, size_t size, const char* path) {
+    const size_t prefetch_max = round_down_to_page_size((size_t) INT_MAX);
+    do {
+        const size_t prefetch_size = math_min(size, prefetch_max);
+        const struct radvisory ra = {
+            .ra_offset = offset,
+            .ra_count = (int) prefetch_size,
+        };
+        if (fcntl(fd, F_RDADVISE, &amp;ra) == -1) {
+            GPTOSS_LOG_WARNING(&quot;fcntl(%s, F_RDADVISE, .ra_offset=%zu, .ra_count=%d) failed with error %d\\n&quot;,
+                path, (size_t) ra.ra_offset, ra.ra_count, errno);
+            return;
+        }
+        offset += prefetch_size;
+        size -= prefetch_size;
+    } while (size != 0);
+}
+</code></pre>
+
+<h4 id="_8">功能:</h4>
+<ul>
+<li><strong>预取优化</strong>: 告知系统即将访问的数据，提前加载到缓存</li>
+<li><strong>分块处理</strong>: 处理大文件时分块预取避免系统限制</li>
+<li><strong>性能提升</strong>: 显著提高后续文件访问速度</li>
+</ul>
+<h2 id="api">主要API函数</h2>
+<h3 id="gptoss_model_create_from_file"><code>gptoss_model_create_from_file</code> 模型加载</h3>
+<p><strong>位置</strong>: 第 80-440 行
+<strong>功能</strong>: 从文件加载完整的 GPT 模型</p>
+<h4 id="_9">核心执行流程:</h4>
+<h5 id="1-92-106">1. 文件打开和基本验证 (第 92-106 行)</h5>
+<pre class="codehilite"><code class="language-c">fd = open(path, O_RDONLY);
+if (fd == -1) {
+    GPTOSS_LOG_ERROR(&quot;open(%s) failed with error %d&quot;, path, errno);
+    switch (errno) {
+        case EISDIR:
+        case ENOENT:
+        case ENOTDIR:
+            status = gptoss_status_invalid_argument;
+            break;
+        default:
+            status = gptoss_status_io_error;
+            break;
+    }
+    goto cleanup;
+}
+</code></pre>
+
+<h5 id="2-108-132">2. 文件头验证 (第 108-132 行)</h5>
+<pre class="codehilite"><code class="language-c">struct gptoss_file_header file_header;
+status = read_fd(fd, &amp;file_header, sizeof(file_header), path);
+
+// Magic number 验证: &quot;GPT-OSS v1.0&quot;
+if (file_header.magic[0] != 'G' ||
+    file_header.magic[1] != 'P' ||
+    file_header.magic[2] != 'T' ||
+    file_header.magic[3] != '-' ||
+    file_header.magic[4] != 'O' ||
+    file_header.magic[5] != 'S' ||
+    file_header.magic[6] != 'S' ||
+    file_header.magic[7] != ' ' ||
+    file_header.magic[8] != 'v' ||
+    file_header.magic[9] != '1' ||
+    file_header.magic[10] != '.' ||
+    file_header.magic[11] != '0' ||
+    file_header.zero != 0)
+{
+    GPTOSS_LOG_ERROR(&quot;invalid magic in file %s&quot;, path);
+    status = gptoss_status_invalid_argument;
+    goto cleanup;
+}
+</code></pre>
+
+<h5 id="3-uuid-134-165">3. 模型 UUID 和头信息验证 (第 134-165 行)</h5>
+<pre class="codehilite"><code class="language-c">struct gptoss_uuid model_uuid;
+status = read_fd(fd, &amp;model_uuid, sizeof(model_uuid), path);
+if (!gptoss_is_gptoss_model_uuid(&amp;model_uuid)) {
+    GPTOSS_LOG_ERROR(&quot;unsupported model UUID &quot; UUID_FORMAT, UUID_ARGS(model_uuid));
+    status = gptoss_status_invalid_argument;
+    goto cleanup;
+}
+
+struct gptoss_gptoss_model_header model_header;
+status = read_fd(fd, &amp;model_header, sizeof(model_header), path);
+
+struct gptoss_uuid layout_uuid;  
+status = read_fd(fd, &amp;layout_uuid, sizeof(layout_uuid), path);
+if (!gptoss_is_applegpu_layout_uuid(&amp;layout_uuid)) {
+    GPTOSS_LOG_ERROR(&quot;unsupported layout UUID &quot; UUID_FORMAT, UUID_ARGS(layout_uuid));
+    status = gptoss_status_invalid_argument;
+    goto cleanup;
+}
+</code></pre>
+
+<h5 id="4-167-194">4. 模型结构体分配和初始化 (第 167-194 行)</h5>
+<pre class="codehilite"><code class="language-c">const size_t model_size = sizeof(struct gptoss_model) + model_header.num_blocks * sizeof(struct gptoss_metal_buffer);
+model = malloc(model_size);
+if (model == NULL) {
+    GPTOSS_LOG_ERROR(&quot;failed to allocate %zu bytes for model descriptor&quot;, model_size);
+    status = gptoss_status_insufficient_memory;
+    goto cleanup;
+}
+memset(model, 0, model_size);
+
+atomic_store_explicit(&amp;model-&gt;ref_count, 1, memory_order_relaxed);
+model-&gt;context_length = model_header.context_length;
+model-&gt;num_blocks = model_header.num_blocks;
+model-&gt;num_experts = model_header.num_experts;
+// ... 更多模型参数初始化
+</code></pre>
+
+<h5 id="5-197-265">5. 分词器加载 (第 197-265 行)</h5>
+<pre class="codehilite"><code class="language-c">struct gptoss_uuid tokenizer_uuid;
+status = read_fd(fd, &amp;tokenizer_uuid, sizeof(tokenizer_uuid), path);
+if (!gptoss_is_tiktoken_tokenizer_uuid(&amp;tokenizer_uuid)) {
+    GPTOSS_LOG_ERROR(&quot;unsupported tokenizer UUID &quot; UUID_FORMAT, UUID_ARGS(tokenizer_uuid));
+    status = gptoss_status_invalid_argument;
+    goto cleanup;
+}
+
+// 内存映射分词器数据
+const size_t tokenizer_mapping_size = round_up_to_page_size(tokenizer_end_offset) - tokenizer_mapping_start;
+void* tokenizer_mapping_ptr = mmap(NULL, tokenizer_mapping_size, PROT_READ, MAP_PRIVATE, fd, tokenizer_mapping_start);
+</code></pre>
+
+<h5 id="6-metal-293-356">6. Metal 设备和内核初始化 (第 293-356 行)</h5>
+<pre class="codehilite"><code class="language-c">// 初始化 Metal 设备
+status = gptoss_metal_device_create_system_default(&amp;model-&gt;device);
+model-&gt;max_threadgroups = model-&gt;device.num_cores * 3;
+status = gptoss_metal_command_queue_create(&amp;model-&gt;device, &amp;model-&gt;command_queue);
+
+// 加载 Metal 库和内核函数
+status = gptoss_metal_library_create_default(&amp;model-&gt;device, &amp;model-&gt;library);
+status = gptoss_metal_function_create(&amp;model-&gt;library, &quot;gptoss_bf16_f32_embeddings&quot;, &amp;model-&gt;bf16_f32_embeddings_fn);
+status = gptoss_metal_function_create(&amp;model-&gt;library, &quot;gptoss_f32_bf16w_rmsnorm&quot;, &amp;model-&gt;f32_bf16w_rmsnorm_fn);
+// ... 加载更多内核函数
+</code></pre>
+
+<h5 id="7-358-422">7. 权重缓冲区映射 (第 358-422 行)</h5>
+<pre class="codehilite"><code class="language-c">// 计算各层权重偏移量
+const size_t embedding_weight_size = math_round_up_po2(model-&gt;vocabulary_size * model-&gt;embedding_dim * sizeof(gptoss_bfloat16), 16);
+model-&gt;attn_rmsnorm_gain_offset = embedding_weight_size;
+// ... 更多偏移量计算
+
+// 创建共享权重缓冲区
+status = gptoss_metal_buffer_wrap(&amp;model-&gt;device, shared_weights_size, current_ptr, &amp;model-&gt;shared_weight_buffer);
+
+// 为每个块创建 MoE 权重缓冲区
+for (uint32_t n = 0; n &lt; model-&gt;num_blocks; n++) {
+    status = gptoss_metal_buffer_wrap(&amp;model-&gt;device, moe_block_weight_size, current_ptr, &amp;model-&gt;block_weight_buffers[n]);
+    current_ptr += moe_block_weight_size;
+    model-&gt;weights_size += moe_block_weight_size;
+}
+</code></pre>
+
+<h3 id="api_1">辅助API函数</h3>
+<h4 id="gptoss_model_get_tokenizer"><code>gptoss_model_get_tokenizer</code></h4>
+<p><strong>位置</strong>: 第 442-450 行</p>
+<pre class="codehilite"><code class="language-c">enum gptoss_status GPTOSS_ABI gptoss_model_get_tokenizer(
+    gptoss_model_t model,
+    gptoss_tokenizer_t* tokenizer_out)
+{
+    gptoss_tokenizer_t tokenizer = model-&gt;tokenizer;
+    atomic_fetch_add_explicit(&amp;tokenizer-&gt;ref_count, 1, memory_order_relaxed);
+    *tokenizer_out = tokenizer;
+    return gptoss_status_success;
+}
+</code></pre>
+
+<h4 id="gptoss_model_get_max_context_length"><code>gptoss_model_get_max_context_length</code></h4>
+<p><strong>位置</strong>: 第 452-458 行</p>
+<pre class="codehilite"><code class="language-c">enum gptoss_status GPTOSS_ABI gptoss_model_get_max_context_length(
+    gptoss_model_t model,
+    size_t* max_context_length_out)
+{
+    *max_context_length_out = model-&gt;context_length;
+    return gptoss_status_success;
+}
+</code></pre>
+
+<h3 id="_10">内存管理</h3>
+<h4 id="gptoss_model_retain"><code>gptoss_model_retain</code> 引用计数增加</h4>
+<p><strong>位置</strong>: 第 460-465 行</p>
+<pre class="codehilite"><code class="language-c">enum gptoss_status GPTOSS_ABI gptoss_model_retain(gptoss_model_t model)
+{
+    atomic_fetch_add_explicit(&amp;model-&gt;ref_count, 1, memory_order_relaxed);
+    return gptoss_status_success;
+}
+</code></pre>
+
+<h4 id="gptoss_model_release"><code>gptoss_model_release</code> 资源释放</h4>
+<p><strong>位置</strong>: 第 467-511 行</p>
+<pre class="codehilite"><code class="language-c">enum gptoss_status GPTOSS_ABI gptoss_model_release(gptoss_model_t model)
+{
+    if (model != NULL) {
+        if (atomic_fetch_sub_explicit(&amp;model-&gt;ref_count, 1, memory_order_acq_rel) == 1) {
+            // 释放分词器
+            gptoss_tokenizer_release(model-&gt;tokenizer);
+
+            // 释放权重缓冲区
+            gptoss_metal_buffer_release(&amp;model-&gt;shared_weight_buffer);
+            for (uint32_t n = 0; n &lt; model-&gt;num_blocks; n++) {
+                gptoss_metal_buffer_release(&amp;model-&gt;block_weight_buffers[n]);
+            }
+
+            // 释放 Metal 内核和资源
+            gptoss_metal_function_release(&amp;model-&gt;bf16_f32_embeddings_fn);
+            // ... 释放所有内核函数
+            gptoss_metal_library_release(&amp;model-&gt;library);
+            gptoss_metal_command_queue_release(&amp;model-&gt;command_queue);
+            gptoss_metal_device_release(&amp;model-&gt;device);
+
+            // 解除内存映射
+            if (model-&gt;mapping_ptr != NULL &amp;&amp; model-&gt;mapping_size != 0) {
+                if (munmap(model-&gt;mapping_ptr, model-&gt;mapping_size) != 0) {
+                    GPTOSS_LOG_WARNING(&quot;munmap for model weight mapping failed with error %d&quot;, errno);
+                }
+            }
+
+            // 清零并释放结构体
+            memset(model, 0, model_size);
+            free(model);
+        }
+    }
+    return gptoss_status_success;
+}
+</code></pre>
+
+<h2 id="_11">内存布局设计</h2>
+<h3 id="_12">权重存储结构</h3>
+<ol>
+<li><strong>嵌入权重</strong>: 词汇表 × 嵌入维度</li>
+<li><strong>每层共享权重</strong>: 
+   - 注意力权重 (Q, K, V)
+   - 注意力输出权重
+   - MLP 门控权重
+   - LayerNorm 权重</li>
+<li><strong>MoE 专家权重</strong>: 每层的专家特定权重</li>
+<li><strong>输出权重</strong>: 最终的词汇表投影</li>
+</ol>
+<h3 id="_13">内存对齐策略</h3>
+<ul>
+<li><strong>16字节对齐</strong>: 所有权重缓冲区16字节对齐，优化 Metal GPU 访问</li>
+<li><strong>页面对齐</strong>: 内存映射区域页面对齐，提高系统效率</li>
+<li><strong>连续布局</strong>: 权重按访问模式连续存储</li>
+</ul>
+<h2 id="metal-gpu">Metal GPU 集成</h2>
+<h3 id="_14">内核函数列表</h3>
+<ul>
+<li><code>gptoss_bf16_f32_embeddings</code>: 嵌入层计算</li>
+<li><code>gptoss_f32_bf16w_rmsnorm</code>: RMSNorm 归一化</li>
+<li><code>gptoss_f32_bf16w_matmul</code>: 矩阵乘法</li>
+<li><code>gptoss_f32_rope</code>: RoPE 位置编码</li>
+<li><code>gptoss_f32_mf4w_moe_matmul_swiglu</code>: MoE + SwiGLU 融合计算</li>
+<li><code>gptoss_f32_topk_softmax_e*_k4</code>: Top-K Softmax 路由</li>
+<li><code>gptoss_f32_sdpa_q8_d64</code>: 缩放点积注意力</li>
+</ul>
+<h3 id="_15">设备管理</h3>
+<ul>
+<li><strong>系统默认设备</strong>: 自动选择最佳 GPU</li>
+<li><strong>命令队列</strong>: 管理 GPU 计算任务</li>
+<li><strong>线程组配置</strong>: 基于 GPU 核心数优化并行度</li>
+</ul>
+<h2 id="_16">错误处理和诊断</h2>
+<h3 id="_17">状态码系统</h3>
+<pre class="codehilite"><code class="language-c">enum gptoss_status {
+    gptoss_status_success,
+    gptoss_status_invalid_argument,
+    gptoss_status_io_error,
+    gptoss_status_insufficient_memory,
+    // ...
+};
+</code></pre>
+
+<h3 id="_18">日志系统</h3>
+<ul>
+<li><strong>分级日志</strong>: ERROR, WARNING, INFO 等级别</li>
+<li><strong>详细信息</strong>: 包含文件名、大小、错误码等上下文</li>
+<li><strong>调试支持</strong>: 便于问题诊断和性能分析</li>
+</ul>
+<h2 id="_19">性能优化特性</h2>
+<h3 id="io_1">I/O 优化</h3>
+<ul>
+<li><strong>内存映射</strong>: 避免数据拷贝，直接映射文件到内存</li>
+<li><strong>预取</strong>: 主动预取即将访问的数据</li>
+<li><strong>分块读取</strong>: 大文件分块处理避免内存压力</li>
+</ul>
+<h3 id="_20">内存优化</h3>
+<ul>
+<li><strong>引用计数</strong>: 安全的资源共享和释放</li>
+<li><strong>页面对齐</strong>: 优化系统内存管理</li>
+<li><strong>零拷贝</strong>: 权重直接从文件映射使用</li>
+</ul>
+<h3 id="gpu">GPU 优化</h3>
+<ul>
+<li><strong>融合内核</strong>: 多个操作合并为单个 GPU 内核</li>
+<li><strong>混合精度</strong>: BFloat16 和 FP32 混合使用</li>
+<li><strong>专门化</strong>: 针对不同专家数量的专门内核</li>
+</ul>
+<h2 id="_21">与其他模块的关系</h2>
+<h3 id="python">Python 接口</h3>
+<ul>
+<li>通过 Python C 扩展暴露给上层</li>
+<li>支持 <code>gpt_oss.metal</code> 模块调用</li>
+</ul>
+<h3 id="_22">依赖模块</h3>
+<ul>
+<li>内部数据类型定义 (<code>internal/datatype.h</code>)</li>
+<li>Metal GPU 抽象层 (<code>internal/metal.h</code>)</li>
+<li>数学工具函数 (<code>internal/math.h</code>)</li>
+</ul>
+<h2 id="_23">使用示例</h2>
+<pre class="codehilite"><code class="language-c">#include &lt;gpt-oss.h&gt;
+
+int main() {
+    gptoss_model_t model;
+    enum gptoss_status status;
+
+    // 从文件加载模型
+    status = gptoss_model_create_from_file(&quot;model.gptoss&quot;, &amp;model);
+    if (status != gptoss_status_success) {
+        // 错误处理
+        return -1;
+    }
+
+    // 获取分词器
+    gptoss_tokenizer_t tokenizer;
+    gptoss_model_get_tokenizer(model, &amp;tokenizer);
+
+    // 使用模型...
+
+    // 清理资源
+    gptoss_tokenizer_release(tokenizer);
+    gptoss_model_release(model);
+
+    return 0;
+}
+</code></pre>
+
+<h2 id="_24">技术亮点</h2>
+<h3 id="1">1. <strong>系统级优化</strong></h3>
+<p>充分利用 Apple 系统特性，如内存映射、预取等</p>
+<h3 id="2-gpu">2. <strong>GPU 原生支持</strong></h3>
+<p>深度集成 Metal GPU 计算，提供最佳性能</p>
+<h3 id="3">3. <strong>内存安全</strong></h3>
+<p>严格的引用计数和资源管理，避免内存泄漏</p>
+<h3 id="4">4. <strong>错误恢复</strong></h3>
+<p>完善的错误处理和资源清理机制</p>
+<h3 id="5">5. <strong>可移植性</strong></h3>
+<p>虽然针对 Apple 平台优化，但保持了良好的代码结构</p>
+<p>这个模块代表了在 Apple 平台上进行高性能 AI 推理的最佳实践，将系统级优化、GPU 计算和内存管理完美结合。</p>
+            </article>
+            
+            <nav class="page-nav"><a href="./08_triton_moe.html" class="nav-link prev">← Triton MoE 专家混合模型模块分析</a><a href="./10_generate.html" class="nav-link next">Generate 文本生成主脚本分析 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>

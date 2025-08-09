@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Torch Weights 权重加载模块分析</title>
+    <link rel="stylesheet" href="./assets/style.css">
+    <link rel="stylesheet" href="./assets/highlight.css">
+    <script src="./assets/script.js" defer></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: false,
+                packages: {'[+]': ['noerrors', 'ams']}
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process'
+            },
+            loader: {
+                load: ['[tex]/noerrors', '[tex]/ams']
+            }
+        };
+    </script>
+</head>
+<body>
+    <div class="container">
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h3>目录</h3>
+                <button id="sidebar-toggle" class="sidebar-toggle">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </button>
+            </div>
+            <ul class="nav-list"><li class=""><a href="./00_项目总览.html">GPT-OSS 项目技术分析总览</a></li><li class=""><a href="./01_torch_model.html">torch/model.py 模块分析文档</a></li><li class=""><a href="./02_triton_model.html">Triton 模型实现分析</a></li><li class=""><a href="./03_chat.html">chat.py 文件分析文档</a></li><li class=""><a href="./04_tokenizer.html">Tokenizer 分词器模块分析</a></li><li class="active"><a href="./05_torch_weights.html">Torch Weights 权重加载模块分析</a></li><li class=""><a href="./06_responses_api_server.html">Responses API Server 响应式API服务器分析</a></li><li class=""><a href="./07_tools_tool.html">Tools Tool 工具基类模块分析</a></li><li class=""><a href="./08_triton_moe.html">Triton MoE 专家混合模型模块分析</a></li><li class=""><a href="./09_metal_model.html">Metal Model C语言实现模块分析</a></li><li class=""><a href="./10_generate.html">Generate 文本生成主脚本分析</a></li></ul>
+        </nav>
+        
+        <main class="content">
+            <article>
+                <h1 id="torch-weights">Torch Weights 权重加载模块分析</h1>
+<h2 id="_1">文件位置</h2>
+<p><code>/Users/georgezhou/Downloads/gpt-oss/gpt_oss/torch/weights.py</code></p>
+<h2 id="_2">概述</h2>
+<p>这是一个专门处理 MXFP4 (Mixed-Precision 4-bit Floating Point) 量化权重的加载模块。它负责从 SafeTensors 格式的检查点文件中加载模型权重，并支持高效的 MXFP4 量化格式解码。</p>
+<h2 id="_3">核心常量定义</h2>
+<h3 id="mxfp4">MXFP4 相关常量</h3>
+<p><strong>位置</strong>: 第 8-14 行</p>
+<pre class="codehilite"><code class="language-python">BYTES_PER_BLOCK = 16  # 32个FP4数字打包在16字节中
+FP4_VALUES = [
+    +0.0, +0.5, +1.0, +1.5, +2.0, +3.0, +4.0, +6.0,  # 正值
+    -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,  # 负值
+]
+</code></pre>
+
+<ul>
+<li><strong>BYTES_PER_BLOCK</strong>: 每个 MXFP4 块包含 32 个 FP4 数字，压缩到 16 字节</li>
+<li><strong>FP4_VALUES</strong>: FP4 格式支持的 16 个浮点值的查找表</li>
+</ul>
+<h3 id="_4">参数名映射</h3>
+<p><strong>位置</strong>: 第 16-25 行</p>
+<pre class="codehilite"><code class="language-python">PARAM_NAME_MAP = {
+    f&quot;block.{n}.mlp.mlp1_bias&quot;: f&quot;block.{n}.mlp.mlp1_bias&quot; for n in range(36)
+} | {
+    f&quot;block.{n}.mlp.mlp1_weight&quot;: (f&quot;block.{n}.mlp.mlp1_weight.blocks&quot;, f&quot;block.{n}.mlp.mlp1_weight.scales&quot;) for n in range(36)
+} | {
+    f&quot;block.{n}.mlp.mlp2_bias&quot;: f&quot;block.{n}.mlp.mlp2_bias&quot; for n in range(36)
+} | {
+    f&quot;block.{n}.mlp.mlp2_weight&quot;: (f&quot;block.{n}.mlp.mlp2_weight.blocks&quot;, f&quot;block.{n}.mlp.mlp2_weight.scales&quot;) for n in range(36)
+}
+</code></pre>
+
+<p>将逻辑参数名映射到检查点中的实际张量名，支持 36 个 transformer 块。</p>
+<h2 id="checkpoint">核心类: Checkpoint</h2>
+<h3 id="__init__">构造函数 <code>__init__</code></h3>
+<p><strong>位置</strong>: 第 29-50 行
+<strong>功能</strong>: 初始化检查点加载器</p>
+<h4 id="_5">实现过程:</h4>
+<ol>
+<li><strong>设备字符串构建</strong> (第 30-35 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">device_str = (
+    device.type if device.index is None
+    else device.type + &quot;:&quot; + str(device.index)
+)
+</code></pre>
+
+<ol start="2">
+<li>
+<p><strong>SafeTensors 文件扫描</strong> (第 37-42 行):
+   扫描检查点目录中所有 <code>.safetensors</code> 文件</p>
+</li>
+<li>
+<p><strong>张量映射构建</strong> (第 43-49 行):</p>
+</li>
+</ol>
+<pre class="codehilite"><code class="language-python">tensor_name_to_file = {}
+for safetensor_file in safetensor_files:
+    with safe_open(safetensor_file, framework=&quot;pt&quot;, device=device_str) as f:
+        for key in f.keys():
+            tensor_name_to_file[key] = safetensor_file
+</code></pre>
+
+<h3 id="_6">主要方法</h3>
+<h4 id="getname-str-torchtensor"><code>get(name: str) -&gt; torch.Tensor</code></h4>
+<p><strong>位置</strong>: 第 52-59 行
+<strong>功能</strong>: 根据参数名获取张量</p>
+<p>实现逻辑:</p>
+<ol>
+<li>使用参数名映射查找实际张量名</li>
+<li>如果返回元组 (blocks_name, scales_name)，调用 <code>_get_mxfp4_tensor</code></li>
+<li>如果返回单个名称，调用 <code>_get_tensor</code></li>
+</ol>
+<h4 id="_get_tensorname-str-torchtensor"><code>_get_tensor(name: str) -&gt; torch.Tensor</code></h4>
+<p><strong>位置</strong>: 第 61-66 行
+<strong>功能</strong>: 加载普通张量（偏置等）</p>
+<h4 id="_get_mxfp4_tensor-torchtensor"><code>_get_mxfp4_tensor(...) -&gt; torch.Tensor</code></h4>
+<p><strong>位置</strong>: 第 68-117 行
+<strong>功能</strong>: 解码 MXFP4 量化权重</p>
+<h5 id="_7">核心解码算法:</h5>
+<ol>
+<li><strong>数据加载</strong> (第 83-84 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">blocks = self._get_tensor(blocks_name)
+scales = self._get_tensor(scales_name).to(torch.int32) - 127
+</code></pre>
+
+<ol start="2">
+<li><strong>查找表创建</strong> (第 90 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">lut = torch.tensor(FP4_VALUES, dtype=dtype, device=blocks.device)
+</code></pre>
+
+<ol start="3">
+<li><strong>分块处理</strong> (第 100-116 行):</li>
+</ol>
+<pre class="codehilite"><code class="language-python">for r0 in range(0, rows_total, rows_per_chunk):
+    # 提取低4位和高4位
+    idx_lo = (blk &amp; 0x0F).to(torch.long)
+    idx_hi = (blk &gt;&gt; 4).to(torch.long)
+
+    # 查找表映射
+    sub[:, 0::2] = lut[idx_lo]
+    sub[:, 1::2] = lut[idx_hi]
+
+    # 应用缩放因子
+    torch.ldexp(sub, exp, out=sub)
+</code></pre>
+
+<h2 id="mxfp4_1">MXFP4 量化原理</h2>
+<h3 id="_8">数据格式</h3>
+<ol>
+<li><strong>Blocks</strong>: 每字节包含两个 4 位索引（低4位和高4位）</li>
+<li><strong>Scales</strong>: 每组对应的指数缩放因子</li>
+<li><strong>解码</strong>: <code>value = FP4_VALUES[index] * 2^(scale-127)</code></li>
+</ol>
+<h3 id="_9">内存效率</h3>
+<ul>
+<li><strong>压缩比</strong>: 16:1 (相对于 FP16)</li>
+<li><strong>分块处理</strong>: 避免大张量一次性加载到内存</li>
+<li><strong>交错存储</strong>: 支持 SwiGLU 激活的高效计算</li>
+</ul>
+<h2 id="_10">优化版本对比</h2>
+<h3 id="_get_mxfp4_tensor"><code>_get_mxfp4_tensor</code> (内存优化版)</h3>
+<p><strong>位置</strong>: 第 68-117 行</p>
+<ul>
+<li>分块处理，内存使用少</li>
+<li>适合大型模型推理</li>
+</ul>
+<h3 id="_get_mxfp4_tensor_copy"><code>_get_mxfp4_tensor_copy</code> (简化版)</h3>
+<p><strong>位置</strong>: 第 119-137 行</p>
+<ul>
+<li>一次性处理所有数据</li>
+<li>内存使用多但代码简洁</li>
+</ul>
+<h2 id="_11">与其他模块的关系</h2>
+<h3 id="_12">依赖模块</h3>
+<ul>
+<li><code>torch</code>: PyTorch 框架</li>
+<li><code>safetensors</code>: 安全张量格式</li>
+<li><code>math</code>: 数学运算</li>
+</ul>
+<h3 id="_13">被调用者</h3>
+<ul>
+<li><code>gpt_oss/torch/model.py</code>: Torch 模型实现</li>
+<li><code>gpt_oss/triton/model.py</code>: Triton 模型实现</li>
+</ul>
+<h2 id="_14">性能特征</h2>
+<h3 id="_15">内存优化</h3>
+<ul>
+<li>分块加载避免 OOM</li>
+<li>支持不同设备 (CPU/GPU)</li>
+<li>内存映射文件读取</li>
+</ul>
+<h3 id="_16">计算优化</h3>
+<ul>
+<li>查找表快速解码</li>
+<li>向量化操作</li>
+<li>原地计算减少内存分配</li>
+</ul>
+<h2 id="_17">使用示例</h2>
+<pre class="codehilite"><code class="language-python">import torch
+from gpt_oss.torch.weights import Checkpoint
+
+# 初始化检查点加载器
+device = torch.device(&quot;cuda:0&quot;)
+checkpoint = Checkpoint(&quot;path/to/checkpoint/&quot;, device)
+
+# 加载普通权重 (bias)
+bias = checkpoint.get(&quot;block.0.mlp.mlp1_bias&quot;)
+
+# 加载量化权重 (自动解码 MXFP4)
+weight = checkpoint.get(&quot;block.0.mlp.mlp1_weight&quot;)
+</code></pre>
+
+<h2 id="_18">技术亮点</h2>
+<ol>
+<li><strong>高效量化</strong>: MXFP4 格式在保持精度的同时大幅减少内存使用</li>
+<li><strong>灵活映射</strong>: 支持不同的参数命名约定</li>
+<li><strong>分块处理</strong>: 处理超大权重时的内存安全</li>
+<li><strong>设备感知</strong>: 自动适配不同的 PyTorch 设备</li>
+</ol>
+            </article>
+            
+            <nav class="page-nav"><a href="./04_tokenizer.html" class="nav-link prev">← Tokenizer 分词器模块分析</a><a href="./06_responses_api_server.html" class="nav-link next">Responses API Server 响应式API服务器分析 →</a></nav>
+        </main>
+    </div>
+</body>
+</html>
